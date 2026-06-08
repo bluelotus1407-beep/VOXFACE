@@ -1,0 +1,198 @@
+html, body, #root {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+  user-select: none;
+  box-sizing: border-box;
+}
+
+/* Base Widget Container */
+.widget-window {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  overflow: visible;
+  transition: opacity 0.3s ease;
+}
+
+/* Draggable regions */
+.drag-handle {
+  cursor: grab;
+}
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Neon Glow Palettes */
+.glow-green {
+  color: #00ff41 !important;
+  box-shadow: 0 0 15px rgba(0, 255, 65, 0.25);
+}
+.glow-amber {
+  color: #ffb000 !important;
+  box-shadow: 0 0 15px rgba(255, 176, 0, 0.25);
+}
+.glow-white {
+  color: #ffffff !important;
+  box-shadow: 0 0 15px rgba(255, 255, 255, 0.2);
+}
+.glow-red-glitch {
+  color: #ff2b2b !important;
+  box-shadow: 0 0 15px rgba(255, 43, 43, 0.3);
+}
+
+/* Typewriter cursor blinking */
+.terminal-cursor {
+  animation: blink 0.8s infinite steps(1);
+  margin-left: 2px;
+}
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* Pulse for idle circle */
+.idle-pulse {
+  animation: idle-glow 3s infinite ease-in-out;
+}
+@keyframes idle-glow {
+  0%, 100% {
+    opacity: 0.65;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 0.95;
+    transform: scale(1.02);
+  }
+}
+
+/* Status Dot pulses */
+.status-dot {
+  position: absolute;
+}
+.dot-pulse-green {
+  animation: pulse-g 1.5s infinite ease-in-out;
+}
+@keyframes pulse-g {
+  0%, 100% {
+    opacity: 0.6;
+    box-shadow: 0 0 4px #00ff41;
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 10px #00ff41;
+  }
+}
+
+.dot-pulse-amber {
+  animation: pulse-a 2.0s infinite ease-in-out;
+}
+@keyframes pulse-a {
+  0%, 100% {
+    opacity: 0.7;
+    box-shadow: 0 0 4px #ffb000;
+  }
+  50% {
+    opacity: 1;
+    box-shadow: 0 0 8px #ffb000;
+  }
+}
+
+/* Settings Form Controls */
+.retro-input {
+  background-color: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 4px;
+  color: #ffffff;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 11px;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.retro-input:focus {
+  border-color: #71717a;
+  box-shadow: 0 0 4px rgba(113, 113, 122, 0.4);
+}
+
+.retro-select {
+  background-color: #27272a;
+  border: 1px solid #3f3f46;
+  border-radius: 4px;
+  color: #ffffff;
+  padding: 3px 4px;
+  font-family: inherit;
+  font-size: 11px;
+  outline: none;
+}
+.retro-select:focus {
+  border-color: #71717a;
+}
+
+.retro-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: #3f3f46;
+  outline: none;
+  margin: 6px 0;
+}
+.retro-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #a1a1aa;
+  cursor: pointer;
+  box-shadow: 0 0 4px rgba(0, 0, 0, 0.5);
+  transition: background 0.2s ease;
+}
+.retro-slider::-webkit-slider-thumb:hover {
+  background: #ffffff;
+}
+
+/* Checkbox layout */
+.checkbox-container {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+.checkbox-container input {
+  accent-color: #52525b;
+}
+
+/* Settings panel scrollbar */
+.settings-scrollbar::-webkit-scrollbar {
+  width: 5px;
+}
+.settings-scrollbar::-webkit-scrollbar-track {
+  background: #18181b;
+}
+.settings-scrollbar::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 3px;
+}
+.settings-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+/* Tauri draggable region (attribute + CSS for WebKit) */
+[data-tauri-drag-region] {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+
+/* Interactive areas must not initiate window drag */
+.no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
+
