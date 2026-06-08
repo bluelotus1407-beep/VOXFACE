@@ -35,7 +35,25 @@ def main():
         input("\nPress Enter once you have run this command or verified your packages are ready...")
         
     elif system == "Darwin":
-        print("\n--- macOS Prerequisites via Homebrew ---")
+        print("\n--- macOS Prerequisites ---")
+        
+        # Check if Xcode Command Line Tools are installed
+        has_xcode = False
+        try:
+            res = subprocess.run(["xcode-select", "-p"], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if res.returncode == 0:
+                has_xcode = True
+        except Exception:
+            pass
+
+        if not has_xcode:
+            print("Xcode Command Line Tools not detected. Launching macOS installer dialog...")
+            run_cmd(["xcode-select", "--install"], check=False)
+            input("Please complete the Xcode Command Line Tools installation dialog on your screen, then press Enter to continue...")
+        else:
+            print("Xcode Command Line Tools detected.")
+
+        print("\n--- Installing macOS Dependencies via Homebrew ---")
         if shutil.which("brew"):
             print("Homebrew detected. Installing dependencies...")
             run_cmd(["brew", "install", "node", "rust", "python", "git"])
