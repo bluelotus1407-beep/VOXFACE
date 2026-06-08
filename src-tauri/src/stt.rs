@@ -155,9 +155,11 @@ async fn transcribe_and_inject(app: &AppHandle) {
     
     // Find whisper binary
     let bin_path = if let Ok(resource_path) = app.path().resource_dir() {
+        let binary_name = if cfg!(target_os = "windows") { "whisper-cli.exe" } else { "whisper-cli" };
         [
-            resource_path.join("whisper").join("whisper-cli"),
-            resource_path.join("resources").join("whisper").join("whisper-cli"),
+            resource_path.join("whisper").join(binary_name),
+            resource_path.join("resources").join(binary_name),
+            resource_path.join("resources").join("whisper").join(binary_name),
         ]
         .into_iter()
         .find(|path| path.exists())
@@ -165,7 +167,8 @@ async fn transcribe_and_inject(app: &AppHandle) {
         None
     };
     
-    let whisper_bin = bin_path.unwrap_or_else(|| PathBuf::from("whisper-cli"));
+    let default_bin = if cfg!(target_os = "windows") { "whisper-cli.exe" } else { "whisper-cli" };
+    let whisper_bin = bin_path.unwrap_or_else(|| PathBuf::from(default_bin));
     let model_path = whisper_bin.parent().unwrap_or(&whisper_bin).join("ggml-tiny.en.bin");
     
     println!("STT: Running transcription via {:?}", whisper_bin);

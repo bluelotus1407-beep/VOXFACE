@@ -4,6 +4,7 @@ import urllib.request
 import tarfile
 import zipfile
 import shutil
+import platform
 
 # Resource target directories
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -22,7 +23,13 @@ def download_file(url, dest):
     
     print(f"Downloading {url} to {dest}...")
     try:
-        urllib.request.urlretrieve(url, dest)
+        # Set User-Agent to avoid HTTP 403 on some CDNs (like GitHub releases or HF)
+        req = urllib.request.Request(
+            url, 
+            headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        )
+        with urllib.request.urlopen(req) as response, open(dest, 'wb') as out_file:
+            shutil.copyfileobj(response, out_file)
         print("Download complete.")
         return True
     except Exception as e:
@@ -42,67 +49,130 @@ def setup_whisper():
     model_dest = os.path.join(RESOURCES_DIR, "whisper", "ggml-tiny.en.bin")
     download_file(model_url, model_dest)
     
-    dest_path = os.path.join(RESOURCES_DIR, "whisper", "whisper-cli")
+    system = platform.system()
+    binary_name = "whisper-cli.exe" if system == "Windows" else "whisper-cli"
+    dest_path = os.path.join(RESOURCES_DIR, "whisper", binary_name)
     if os.path.exists(dest_path):
         print(f"Already exists: {dest_path}")
         return
         
-    print("whisper-cli not found. Building from source...")
-    import subprocess
-    temp_dir = os.path.join(RESOURCES_DIR, "whisper", "temp_whisper_src")
-    if os.path.exists(temp_dir):
-        shutil.rmtree(temp_dir)
-        
-    try:
-        # Clone whisper.cpp tag v1.7.1
-        subprocess.run(["git", "clone", "--depth", "1", "--branch", "v1.7.1", "https://github.com/ggml-org/whisper.cpp.git", temp_dir], check=True)
-        # Run make main
-        subprocess.run(["make", "main", "-C", temp_dir], check=True)
-        # Copy main to resources/whisper/whisper-cli
-        shutil.copy2(os.path.join(temp_dir, "main"), dest_path)
-        os.chmod(dest_path, 0o755)
-        print(f"whisper-cli built and copied to {dest_path}")
-    except Exception as e:
-        print(f"Failed to compile whisper.cpp: {e}")
-    finally:
+    print(f"{binary_name} not found. Building or downloading...")
+    
+    if system == "Windows":
+        # On Windows, compiling is complex, so download the precompiled whisper-cli.exe directly
+        # from the whisper.cpp v1.7.1 release (CPU-only build to avoid CUDA requirements)
+        whisper_win_url = "https://github.com/ggerganov/whisper.cpp/releases/download/v1.7.1/whisper-bin-x64.zip"
+        zip_dest = os.path.join(RESOURCES_DIR, "whisper", "whisper_win.zip")
+        if download_file(whisper_win_url, zip_dest):
+            try:
+                temp_extract = os.path.join(RESOURCES_DIR, "whisper", "temp_whisper")
+                os.makedirs(temp_extract, exist_ok=True)
+                with zipfile.ZipFile(zip_dest, "r") as zip_ref:
+                    zip_ref.extractall(temp_extract)
+                
+                # In whisper.cpp releases, the executable is named 'main.exe'. Copy as 'whisper-cli.exe'
+                main_exe = os.path.join(temp_extract, "main.exe")
+                if os.path.exists(main_exe):
+                    shutil.copy2(main_exe, dest_path)
+                    os.chmod(dest_path, 0o755)
+                    # Copy all .dll files (like libopenblas.dll)
+                    for item in os.listdir(temp_extract):
+                        if item.endswith(".dll"):
+                            shutil.copy2(os.path.join(temp_extract, item), os.path.join(RESOURCES_DIR, "whisper", item))
+                    print("whisper-cli (precompiled Windows) set up successfully.")
+                else:
+                    print("Could not find main.exe in the downloaded whisper release.")
+                shutil.rmtree(temp_extract)
+                os.remove(zip_dest)
+            except Exception as e:
+                print(f"Failed to extract precompiled whisper: {e}")
+    else:
+        # For Linux and macOS, compile from source
+        import subprocess
+        temp_dir = os.path.join(RESOURCES_DIR, "whisper", "temp_whisper_src")
         if os.path.exists(temp_dir):
             shutil.rmtree(temp_dir)
+            
+        try:
+            # Clone whisper.cpp tag v1.7.1
+            subprocess.run(["git", "clone", "--depth", "1", "--branch", "v1.7.1", "https://github.com/ggml-org/whisper.cpp.git", temp_dir], check=True)
+            # Run make main
+            subprocess.run(["make", "main", "-C", temp_dir], check=True)
+            # Copy main to resources/whisper/whisper-cli
+            shutil.copy2(os.path.join(temp_dir, "main"), dest_path)
+            os.chmod(dest_path, 0o755)
+            print(f"whisper-cli built and copied to {dest_path}")
+        except Exception as e:
+            print(f"Failed to compile whisper.cpp: {e}")
+        finally:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir)
 
 def setup_piper():
     print("\n--- Setting up Piper TTS ---")
-    # Download piper standalone Linux x86_64 binary
-    piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz"
-    tar_dest = os.path.join(RESOURCES_DIR, "piper", "piper.tar.gz")
+    system = platform.system()
+    machine = platform.machine().lower()
+
+    if system == "Linux":
+        if "arm" in machine or "aarch64" in machine:
+            piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_arm64.tar.gz"
+        else:
+            piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz"
+        archive_type = "tar.gz"
+    elif system == "Darwin":
+        if "arm" in machine or "aarch64" in machine:
+            piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_macos_aarch64.tar.gz"
+        else:
+            piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_macos_x64.tar.gz"
+        archive_type = "tar.gz"
+    elif system == "Windows":
+        piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_windows_amd64.zip"
+        archive_type = "zip"
+    else:
+        print(f"Unsupported system for Piper download: {system}")
+        return
+
+    # Download archive
+    filename = "piper.tar.gz" if archive_type == "tar.gz" else "piper.zip"
+    archive_dest = os.path.join(RESOURCES_DIR, "piper", filename)
     
-    if download_file(piper_url, tar_dest):
+    if download_file(piper_url, archive_dest):
         try:
-            print("Extracting piper...")
-            temp_extract = os.path.join(RESOURCES_DIR, "piper", "temp_tar")
+            print(f"Extracting {filename}...")
+            temp_extract = os.path.join(RESOURCES_DIR, "piper", "temp_extract")
+            if os.path.exists(temp_extract):
+                shutil.rmtree(temp_extract)
             os.makedirs(temp_extract, exist_ok=True)
-            with tarfile.open(tar_dest, "r:gz") as tar:
-                tar.extractall(temp_extract)
             
-            # Copy piper executable and libraries
-            # Inside tar: piper/piper, piper/lib*, piper/voice*
+            if archive_type == "tar.gz":
+                with tarfile.open(archive_dest, "r:gz") as tar:
+                    tar.extractall(temp_extract)
+            else:
+                with zipfile.ZipFile(archive_dest, "r") as zip_ref:
+                    zip_ref.extractall(temp_extract)
+            
+            # Copy piper files. In Rhasspy's release, everything is inside a 'piper/' subfolder.
             piper_extracted_dir = os.path.join(temp_extract, "piper")
-            if os.path.exists(piper_extracted_dir):
-                for item in os.listdir(piper_extracted_dir):
-                    s = os.path.join(piper_extracted_dir, item)
-                    d = os.path.join(RESOURCES_DIR, "piper", item)
-                    if os.path.isdir(s):
-                        if os.path.exists(d):
-                            shutil.rmtree(d)
-                        shutil.copytree(s, d)
-                    else:
-                        shutil.copy2(s, d)
-                        if item == "piper":
-                            os.chmod(d, 0o755)
-                print("piper extracted successfully.")
+            if not os.path.exists(piper_extracted_dir):
+                piper_extracted_dir = temp_extract
+
+            for item in os.listdir(piper_extracted_dir):
+                s = os.path.join(piper_extracted_dir, item)
+                d = os.path.join(RESOURCES_DIR, "piper", item)
+                if os.path.isdir(s):
+                    if os.path.exists(d):
+                        shutil.rmtree(d)
+                    shutil.copytree(s, d)
+                else:
+                    shutil.copy2(s, d)
+                    if item in ["piper", "piper.exe"]:
+                        os.chmod(d, 0o755)
             
+            print("Piper extracted successfully.")
             shutil.rmtree(temp_extract)
-            os.remove(tar_dest)
+            os.remove(archive_dest)
         except Exception as e:
-            print(f"Failed to extract piper tar: {e}")
+            print(f"Failed to extract piper: {e}")
             
     # Download default voice model: en_US-lessac-medium
     voice_url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
@@ -119,12 +189,7 @@ def setup_kokoro():
     voice_url = "https://huggingface.co/onnx-community/Kokoro-82M-ONNX/resolve/main/voices/af_bella.bin"
     download_file(voice_url, os.path.join(RESOURCES_DIR, "kokoro", "voices", "af_bella.bin"))
     
-    # We will write a placeholder shell script or download a precompiled kokoro-cli if available,
-    # or compile it. Since kokoro C++ CLI builds are newer, we can also check if a precompiled
-    # CLI binary exists, or tell the user how to place it.
-    # In Option A, if the binary is missing, we fallback to system CLI or print instructions.
-    print("Kokoro model and voice downloaded. If you want to use Kokoro as primary TTS,")
-    print("please install kokoro C++ CLI locally or place kokoro-cli in resources/kokoro/.")
+    print("Kokoro model and voice downloaded.")
 
 def main():
     create_dirs()

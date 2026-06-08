@@ -103,21 +103,47 @@ impl TtsManager {
     fn find_binary(&self, engine: &str, binary_name: &str) -> Option<PathBuf> {
         // 1. Check tauri resource directory (bundled as resources/<engine>/<binary>)
         if let Ok(resource_path) = self.app.path().resource_dir() {
-            for bin_path in [
-                resource_path.join(engine).join(binary_name),
-                resource_path.join("resources").join(engine).join(binary_name),
-            ] {
-                if bin_path.exists() {
-                    return Some(bin_path);
+            let names = if cfg!(target_os = "windows") {
+                vec![format!("{}.exe", binary_name), binary_name.to_string()]
+            } else {
+                vec![binary_name.to_string()]
+            };
+
+            for name in names {
+                for bin_path in [
+                    resource_path.join(engine).join(&name),
+                    resource_path.join("resources").join(engine).join(&name),
+                ] {
+                    if bin_path.exists() {
+                        return Some(bin_path);
+                    }
                 }
             }
         }
         
         // 2. Check system PATH
-        if let Ok(output) = Command::new("which").arg(binary_name).output() {
+        let sys_name = if cfg!(target_os = "windows") {
+            format!("{}.exe", binary_name)
+        } else {
+            binary_name.to_string()
+        };
+
+        if let Ok(output) = Command::new("which").arg(&sys_name).output() {
             if output.status.success() {
                 let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 return Some(PathBuf::from(path_str));
+            }
+        }
+
+        // Windows fallback for system command path lookup
+        #[cfg(target_os = "windows")]
+        {
+            if let Ok(output) = Command::new("where.exe").arg(&sys_name).output() {
+                if output.status.success() {
+                    if let Some(first_line) = String::from_utf8_lossy(&output.stdout).lines().next() {
+                        return Some(PathBuf::from(first_line.trim()));
+                    }
+                }
             }
         }
         
