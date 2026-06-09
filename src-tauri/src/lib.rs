@@ -39,6 +39,7 @@ pub fn run() {
             // Initialize and manage STT state
             let stt_state = stt::init_stt(app.handle().clone());
             app.manage(stt_state);
+            stt::start_stt_loops(app.handle());
 
             // Load settings and start proxy server on startup
             let settings = settings::load_settings(app.handle());

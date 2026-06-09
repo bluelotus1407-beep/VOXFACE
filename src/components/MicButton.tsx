@@ -1,14 +1,13 @@
-import React, { useState } from "react";
+import React from "react";
 import { invoke } from "@tauri-apps/api/core";
 
 interface MicButtonProps {
   sttMode: string;
   color: string;
+  isRecording: boolean;
 }
 
-export const MicButton: React.FC<MicButtonProps> = ({ sttMode, color }) => {
-  const [isRecording, setIsRecording] = useState(false);
-
+export const MicButton: React.FC<MicButtonProps> = ({ sttMode, color, isRecording }) => {
   if (sttMode === "Off") {
     return null;
   }
@@ -16,7 +15,6 @@ export const MicButton: React.FC<MicButtonProps> = ({ sttMode, color }) => {
   const start = async () => {
     try {
       await invoke("stt_start_recording");
-      setIsRecording(true);
     } catch (err) {
       console.error("Failed to start recording:", err);
     }
@@ -25,18 +23,11 @@ export const MicButton: React.FC<MicButtonProps> = ({ sttMode, color }) => {
   const stop = async () => {
     try {
       await invoke("stt_stop_recording");
-      setIsRecording(false);
     } catch (err) {
       console.error("Failed to stop recording:", err);
     }
   };
 
-  const label =
-    sttMode === "Always Listening"
-      ? "Listening…"
-      : isRecording
-        ? "Release to send"
-        : "Hold to talk";
 
   return (
     <button
@@ -65,35 +56,24 @@ export const MicButton: React.FC<MicButtonProps> = ({ sttMode, color }) => {
       title={sttMode === "Push to Talk" ? "Hold to speak, release to send" : "Always listening — just speak"}
       style={{
         position: "absolute",
-        bottom: "10px",
-        right: "10px",
+        top: "215px",
+        left: "262px",
         zIndex: 20,
-        display: "flex",
-        alignItems: "center",
-        gap: "6px",
-        padding: "5px 10px",
-        borderRadius: "16px",
-        border: `2px solid ${color}`,
-        backgroundColor: isRecording ? "rgba(255, 43, 43, 0.25)" : "rgba(0, 0, 0, 0.75)",
-        color,
-        fontFamily: "'Courier New', Courier, monospace",
-        fontSize: "10px",
-        fontWeight: "bold",
+        width: "14px",
+        height: "14px",
+        borderRadius: "50%",
+        padding: 0,
+        border: `1px solid ${color}`,
+        backgroundColor: isRecording ? "#ff2b2b" : "rgba(0, 0, 0, 0.5)",
         cursor: sttMode === "Push to Talk" ? "pointer" : "default",
-        boxShadow: isRecording ? `0 0 12px ${color}` : `0 0 6px ${color}55`,
+        boxShadow: isRecording
+          ? `0 0 8px #ff2b2b`
+          : sttMode === "Always Listening"
+            ? `0 0 4px ${color}`
+            : "none",
         pointerEvents: "auto",
+        transition: "background-color 0.2s ease, box-shadow 0.2s ease, transform 0.1s ease",
       }}
-    >
-      <span
-        style={{
-          width: "8px",
-          height: "8px",
-          borderRadius: "50%",
-          backgroundColor: isRecording || sttMode === "Always Listening" ? "#ff2b2b" : color,
-          animation: isRecording || sttMode === "Always Listening" ? "pulse-g 1s infinite" : "none",
-        }}
-      />
-      {label}
-    </button>
+    />
   );
 };

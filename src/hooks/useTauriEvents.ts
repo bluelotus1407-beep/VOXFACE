@@ -7,14 +7,22 @@ export function useTauriEvents<T>(
   dependencies: any[] = []
 ) {
   useEffect(() => {
+    let active = true;
     let unlistenFn: (() => void) | null = null;
 
     const setupListener = async () => {
       try {
         const unlisten = await listen<T>(eventName, (event) => {
-          callback(event);
+          if (active) {
+            callback(event);
+          }
         });
-        unlistenFn = unlisten;
+        
+        if (!active) {
+          unlisten();
+        } else {
+          unlistenFn = unlisten;
+        }
       } catch (err) {
         console.error(`Failed to subscribe to event ${eventName}:`, err);
       }
@@ -23,6 +31,7 @@ export function useTauriEvents<T>(
     setupListener();
 
     return () => {
+      active = false;
       if (unlistenFn) {
         unlistenFn();
       }

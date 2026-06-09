@@ -7,7 +7,7 @@ use ort::inputs;
 use ort::session::Session;
 use ort::value::Tensor;
 use tauri::{AppHandle, Manager, Emitter};
-use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+use tauri_plugin_global_shortcut::{Code, Modifiers, GlobalShortcutExt, Shortcut, ShortcutState};
 
 #[allow(dead_code)]
 pub struct SendSyncStream(pub cpal::Stream);
@@ -19,6 +19,7 @@ pub struct SttState {
     pub recording: Arc<Mutex<bool>>,
     pub audio_buffer: Arc<Mutex<Vec<f32>>>,
     pub stream: Arc<Mutex<Option<SendSyncStream>>>,
+    pub tts_active: Arc<Mutex<bool>>,
 }
 
 pub fn start_recording(app: &AppHandle) {
@@ -43,13 +44,23 @@ pub fn stop_recording(app: &AppHandle) {
     }
     *recording = false;
     println!("STT: Recording stopped — transcribing...");
+    let _ = app.emit("stt:listening_stop", ());
+    
+    let samples = {
+        let mut buffer = stt_state.audio_buffer.lock().unwrap();
+        let s = buffer.clone();
+        buffer.clear();
+        s
+    };
+    
     let app_clone = app.clone();
     tauri::async_runtime::spawn(async move {
-        transcribe_and_inject(&app_clone).await;
+        transcribe_and_inject_samples(&app_clone, samples).await;
     });
 }
 
-// Global PTT toggle hook called by keyboard shortcut handler
+// Global PTT toggle hook called by keyboard shortcut handler (retained for reference)
+#[allow(dead_code)]
 pub fn handle_ptt_press(app: &AppHandle) {
     let state = app.state::<SttState>();
     let is_recording = *state.inner().recording.lock().unwrap();
@@ -60,12 +71,8 @@ pub fn handle_ptt_press(app: &AppHandle) {
     }
 }
 
-pub fn ptt_hotkey_string(settings: &crate::settings::Settings) -> String {
-    if settings.ptt_hotkey == "Right Ctrl" {
-        "Control+Space".to_string()
-    } else {
-        settings.ptt_hotkey.clone()
-    }
+pub fn ptt_hotkey_string(_settings: &crate::settings::Settings) -> String {
+    "Ctrl + Space".to_string()
 }
 
 pub fn configure_ptt_shortcut(app: &AppHandle) {
@@ -80,23 +87,21 @@ pub fn configure_ptt_shortcut(app: &AppHandle) {
         return;
     }
 
-    let hotkey_str = ptt_hotkey_string(&settings);
-    match hotkey_str.parse::<Shortcut>() {
-        Ok(shortcut) => {
-            let app_handle = app.clone();
-            match gs.on_shortcut(shortcut, move |_app, _shortcut, event| {
-                if event.state() == ShortcutState::Pressed {
-                    handle_ptt_press(&app_handle);
-                }
-            }) {
-                Ok(_) => println!("STT: PTT hotkey registered — {}", hotkey_str),
-                Err(e) => eprintln!(
-                    "STT: Failed to register PTT hotkey ({}): {} — use the mic button on the widget",
-                    hotkey_str, e
-                ),
+    let shortcut = Shortcut::new(Some(Modifiers::CONTROL), Code::Space);
+    let app_handle = app.clone();
+
+    match gs.on_shortcut(shortcut, move |_app, _shortcut, event| {
+        match event.state() {
+            ShortcutState::Pressed => {
+                start_recording(&app_handle);
+            }
+            ShortcutState::Released => {
+                stop_recording(&app_handle);
             }
         }
-        Err(e) => eprintln!("STT: Invalid PTT hotkey '{}': {}", hotkey_str, e),
+    }) {
+        Ok(_) => println!("STT: PTT hold-to-talk registered successfully (Ctrl + Space)"),
+        Err(e) => eprintln!("STT: Failed to register PTT hold-to-talk shortcut: {}", e),
     }
 }
 
@@ -131,14 +136,7 @@ fn write_wav_file(path: &PathBuf, samples: &[f32]) -> bool {
 }
 
 // Spawns whisper-cli to transcribe recorded audio and injects the text
-async fn transcribe_and_inject(app: &AppHandle) {
-    let state = app.state::<SttState>();
-    let stt_state = state.inner();
-    let samples = {
-        let buffer = stt_state.audio_buffer.lock().unwrap();
-        buffer.clone()
-    };
-    
+async fn transcribe_and_inject_samples(app: &AppHandle, samples: Vec<f32>) {
     if samples.is_empty() {
         return;
     }
@@ -171,7 +169,7 @@ async fn transcribe_and_inject(app: &AppHandle) {
     let whisper_bin = bin_path.unwrap_or_else(|| PathBuf::from(default_bin));
     let model_path = whisper_bin.parent().unwrap_or(&whisper_bin).join("ggml-tiny.en.bin");
     
-    println!("STT: Running transcription via {:?}", whisper_bin);
+    println!("STT: Running transcription of {} samples via {:?}", samples.len(), whisper_bin);
     let output_res = Command::new(&whisper_bin)
         .arg("-m").arg(model_path)
         .arg("-f").arg(&wav_path)
@@ -233,14 +231,20 @@ pub fn start_always_listening_loop(app: AppHandle) {
             }
         };
         
-        let mut h = vec![0.0f32; 2 * 1 * 64];
-        let mut c = vec![0.0f32; 2 * 1 * 64];
+        println!("STT: VAD session inputs: {:?}", session.inputs());
+        println!("STT: VAD session outputs: {:?}", session.outputs());
+        
+        let mut state_vec = vec![0.0f32; 2 * 1 * 128];
         
         let state = app.state::<SttState>();
         let stt_state = state.inner();
         let mut silence_start = Instant::now();
         let mut speech_detected = false;
         let mut was_always_listening = false;
+        
+        let mut pre_roll = std::collections::VecDeque::new();
+        let max_pre_roll_samples = 24000; // 1.5 seconds of context at 16kHz
+        let mut speech_buffer = Vec::new();
         
         loop {
             let settings = crate::settings::load_settings(&app);
@@ -250,10 +254,16 @@ pub fn start_always_listening_loop(app: AppHandle) {
                 was_always_listening = is_always;
                 *stt_state.recording.lock().unwrap() = is_always;
                 if is_always {
-                    println!("STT: Always Listening — speak anytime");
+                    println!("STT: Always Listening enabled — monitoring background audio");
                     let _ = app.emit("stt:listening_start", ());
+                    pre_roll.clear();
+                    speech_buffer.clear();
+                    speech_detected = false;
+                    state_vec = vec![0.0f32; 2 * 1 * 128];
                 } else {
+                    println!("STT: Always Listening disabled");
                     stt_state.audio_buffer.lock().unwrap().clear();
+                    let _ = app.emit("stt:listening_stop", ());
                 }
             }
             
@@ -265,12 +275,12 @@ pub fn start_always_listening_loop(app: AppHandle) {
             let chunk_size = 512;
             let mut chunk = vec![0.0f32; chunk_size];
             
-            let has_enough = {
+            let buffer_len = {
                 let buffer = stt_state.audio_buffer.lock().unwrap();
-                buffer.len() >= chunk_size
+                buffer.len()
             };
             
-            if !has_enough {
+            if buffer_len < chunk_size {
                 tokio::time::sleep(Duration::from_millis(10)).await;
                 continue;
             }
@@ -281,19 +291,29 @@ pub fn start_always_listening_loop(app: AppHandle) {
                 buffer.drain(..chunk_size);
             }
             
-            let input_tensor = Tensor::from_array((vec![1, chunk_size], chunk)).unwrap();
-            let sr_tensor = Tensor::from_array((vec![1], vec![16000i64])).unwrap();
-            let h_tensor = Tensor::from_array((vec![2, 1, 64], h.clone())).unwrap();
-            let c_tensor = Tensor::from_array((vec![2, 1, 64], c.clone())).unwrap();
+            if !speech_detected {
+                for &sample in &chunk {
+                    pre_roll.push_back(sample);
+                }
+                while pre_roll.len() > max_pre_roll_samples {
+                    pre_roll.pop_front();
+                }
+            }
+            
+            let input_tensor = Tensor::from_array((vec![1, chunk_size], chunk.clone())).unwrap();
+            let sr_tensor = Tensor::from_array((vec![0i64; 0], vec![16000i64])).unwrap();
+            let state_tensor = Tensor::from_array((vec![2, 1, 128], state_vec.clone())).unwrap();
             
             let outputs = match session.run(inputs![
                 "input" => input_tensor,
                 "sr" => sr_tensor,
-                "h" => h_tensor,
-                "c" => c_tensor
+                "state" => state_tensor
             ]) {
                 Ok(out) => out,
-                Err(_) => continue,
+                Err(e) => {
+                    eprintln!("STT: Failed to run VAD session: {}", e);
+                    continue;
+                }
             };
             
             let output_prob: f32 = if let Some(out_val) = outputs.get("output") {
@@ -302,31 +322,41 @@ pub fn start_always_listening_loop(app: AppHandle) {
                 } else { 0.0 }
             } else { 0.0 };
             
-            if let Some(hn_val) = outputs.get("hn") {
-                if let Ok((_, data)) = hn_val.try_extract_tensor::<f32>() {
-                    h = data.iter().copied().collect();
-                }
-            }
-            if let Some(cn_val) = outputs.get("cn") {
-                if let Ok((_, data)) = cn_val.try_extract_tensor::<f32>() {
-                    c = data.iter().copied().collect();
+            if let Some(state_val) = outputs.get("stateN") {
+                if let Ok((_, data)) = state_val.try_extract_tensor::<f32>() {
+                    state_vec = data.iter().copied().collect();
                 }
             }
             
-            let is_speech = output_prob > 0.5;
+            let is_speech = output_prob > 0.55;
             
             if is_speech {
                 if !speech_detected {
                     speech_detected = true;
-                    println!("STT AlwaysListening: Speech detected!");
+                    println!("STT AlwaysListening: Speech detected (VAD prob={:.4})!", output_prob);
                     let _ = app.emit("stt:speech_detected", ());
+                    speech_buffer = pre_roll.iter().copied().collect();
+                    pre_roll.clear();
                 }
+                speech_buffer.extend_from_slice(&chunk);
                 silence_start = Instant::now();
             } else {
-                if speech_detected && silence_start.elapsed() > Duration::from_millis(1500) {
-                    speech_detected = false;
-                    println!("STT AlwaysListening: Silence detected, processing transcript...");
-                    transcribe_and_inject(&app).await;
+                if speech_detected {
+                    speech_buffer.extend_from_slice(&chunk);
+                    if silence_start.elapsed() > Duration::from_millis(1500) {
+                        speech_detected = false;
+                        println!("STT AlwaysListening: Silence detected, processing transcript...");
+                        let _ = app.emit("stt:listening_stop", ());
+                        
+                        let samples_to_transcribe = speech_buffer.clone();
+                        speech_buffer.clear();
+                        state_vec = vec![0.0f32; 2 * 1 * 128]; // Reset VAD state for next phrase
+                        
+                        let app_clone = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            transcribe_and_inject_samples(&app_clone, samples_to_transcribe).await;
+                        });
+                    }
                 }
             }
         }
@@ -334,12 +364,14 @@ pub fn start_always_listening_loop(app: AppHandle) {
 }
 
 // Initializes input audio capture stream
-pub fn init_stt(app: AppHandle) -> SttState {
+pub fn init_stt(_app: AppHandle) -> SttState {
     let recording = Arc::new(Mutex::new(false));
     let audio_buffer = Arc::new(Mutex::new(Vec::with_capacity(16000 * 10)));
+    let tts_active = Arc::new(Mutex::new(false));
     
     let recording_clone = recording.clone();
     let audio_buffer_clone = audio_buffer.clone();
+    let tts_active_clone = tts_active.clone();
     
     let host = cpal::default_host();
     let stream_opt = if let Some(device) = host.default_input_device() {
@@ -348,17 +380,21 @@ pub fn init_stt(app: AppHandle) -> SttState {
         if let Ok(config) = device.default_input_config() {
             let sample_rate = config.sample_rate().0;
             let channels = config.channels();
+            let ratio = sample_rate as f32 / 16000.0;
+            
+            println!("STT: CPAL default input config: sample_rate={}, channels={}, ratio={}", sample_rate, channels, ratio);
             
             let stream_res = device.build_input_stream(
                 &config.into(),
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
                     let is_rec = *recording_clone.lock().unwrap();
-                    if !is_rec {
+                    let is_tts = *tts_active_clone.lock().unwrap();
+                    
+                    if !is_rec || is_tts {
                         return;
                     }
                     let mut buffer = audio_buffer_clone.lock().unwrap();
                     
-                    let ratio = sample_rate as f32 / 16000.0;
                     let mut temp_mono = Vec::with_capacity(data.len() / channels as usize);
                     
                     for chunk in data.chunks_exact(channels as usize) {
@@ -402,20 +438,23 @@ pub fn init_stt(app: AppHandle) -> SttState {
         None
     };
     
+    SttState {
+        recording,
+        audio_buffer,
+        stream: Arc::new(Mutex::new(stream_opt)),
+        tts_active,
+    }
+}
+
+pub fn start_stt_loops(app: &AppHandle) {
     // Spawn always listening loop
     start_always_listening_loop(app.clone());
-    configure_ptt_shortcut(&app);
+    configure_ptt_shortcut(app);
 
-    let settings = crate::settings::load_settings(&app);
+    let settings = crate::settings::load_settings(app);
     println!(
         "STT: Ready — mode: {} | PTT key: {} | hold the mic button on the widget to talk",
         settings.stt_mode,
         ptt_hotkey_string(&settings)
     );
-
-    SttState {
-        recording,
-        audio_buffer,
-        stream: Arc::new(Mutex::new(stream_opt)),
-    }
 }

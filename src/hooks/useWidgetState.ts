@@ -4,26 +4,21 @@ import { Settings } from "./useSettings";
 
 export type WidgetState = "idle" | "listening" | "speaking";
 
-export function useWidgetState(settings: Settings | null) {
+export function useWidgetState(settings: Settings | null, isSettingsOpen: boolean) {
   const [state, setState] = useState<WidgetState>("idle");
   const idleTimeoutRef = useRef<any>(null);
+  const collapseTimeoutRef = useRef<any>(null);
 
   const resetIdleTimeout = () => {
     if (idleTimeoutRef.current) {
       clearTimeout(idleTimeoutRef.current);
     }
     
-    // Only transition to idle after 3 seconds if not in always-listening STT mode
-    // (In always-listening, we want it to stay in the listening state after speaking completes)
-    const isAlwaysListening = settings?.sttMode === "Always Listening";
-    
+    // Transition to listening state after 1.5 seconds (to match subtitles visibility)
+    // The 10-second inactivity timer will then handle collapsing to idle/mini-icon.
     idleTimeoutRef.current = setTimeout(() => {
-      if (isAlwaysListening) {
-        setState("listening");
-      } else {
-        setState("idle");
-      }
-    }, 3000);
+      setState("listening");
+    }, 1500);
   };
 
   // 1. LLM Token event: transition to speaking
@@ -54,11 +49,54 @@ export function useWidgetState(settings: Settings | null) {
     setState("listening");
   });
 
+  // 4. Inactivity collapse effect: collapse to idle after 10s of inactivity
+  useEffect(() => {
+    if (state === "idle" || isSettingsOpen || state === "speaking") {
+      if (collapseTimeoutRef.current) {
+        clearTimeout(collapseTimeoutRef.current);
+        collapseTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    const resetCollapseTimer = () => {
+      if (collapseTimeoutRef.current) {
+        clearTimeout(collapseTimeoutRef.current);
+      }
+      collapseTimeoutRef.current = setTimeout(() => {
+        setState("idle");
+      }, 10000);
+    };
+
+    // Initialize timer
+    resetCollapseTimer();
+
+    const handleActivity = () => {
+      resetCollapseTimer();
+    };
+
+    window.addEventListener("mousemove", handleActivity);
+    window.addEventListener("mousedown", handleActivity);
+    window.addEventListener("keydown", handleActivity);
+
+    return () => {
+      if (collapseTimeoutRef.current) {
+        clearTimeout(collapseTimeoutRef.current);
+      }
+      window.removeEventListener("mousemove", handleActivity);
+      window.removeEventListener("mousedown", handleActivity);
+      window.removeEventListener("keydown", handleActivity);
+    };
+  }, [state, isSettingsOpen]);
+
   // Cleanup timeout on unmount
   useEffect(() => {
     return () => {
       if (idleTimeoutRef.current) {
         clearTimeout(idleTimeoutRef.current);
+      }
+      if (collapseTimeoutRef.current) {
+        clearTimeout(collapseTimeoutRef.current);
       }
     };
   }, []);
@@ -68,11 +106,6 @@ export function useWidgetState(settings: Settings | null) {
       clearTimeout(idleTimeoutRef.current);
     }
     setState(newState);
-    if (newState === "idle" || (newState === "listening" && settings?.sttMode !== "Always Listening")) {
-      // no timeout reset
-    } else if (newState === "listening" && settings?.sttMode === "Always Listening") {
-      // stays listening
-    }
   };
 
   return { state, setState: setManualState };

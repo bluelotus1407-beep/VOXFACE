@@ -180,6 +180,19 @@ def setup_piper():
     download_file(voice_url, os.path.join(RESOURCES_DIR, "piper", "en_US-lessac-medium.onnx"))
     download_file(voice_config_url, os.path.join(RESOURCES_DIR, "piper", "en_US-lessac-medium.onnx.json"))
 
+    # Download additional male voices for Phase 5
+    piper_extra = [
+        ("en/en_US/danny/low/en_US-danny-low.onnx", "en_US-danny-low.onnx"),
+        ("en/en_US/danny/low/en_US-danny-low.onnx.json", "en_US-danny-low.onnx.json"),
+        ("en/en_US/joe/medium/en_US-joe-medium.onnx", "en_US-joe-medium.onnx"),
+        ("en/en_US/joe/medium/en_US-joe-medium.onnx.json", "en_US-joe-medium.onnx.json"),
+        ("en/en_GB/alan/low/en_GB-alan-low.onnx", "en_GB-alan-low.onnx"),
+        ("en/en_GB/alan/low/en_GB-alan-low.onnx.json", "en_GB-alan-low.onnx.json"),
+    ]
+    for src_path, dest_name in piper_extra:
+        url = f"https://huggingface.co/rhasspy/piper-voices/resolve/main/{src_path}"
+        download_file(url, os.path.join(RESOURCES_DIR, "piper", dest_name))
+
 def setup_kokoro():
     print("\n--- Setting up Kokoro TTS ---")
     onnx_url = "https://huggingface.co/onnx-community/Kokoro-82M-ONNX/resolve/main/onnx/model.onnx"
@@ -188,8 +201,35 @@ def setup_kokoro():
     # Download default voice: af_bella.bin
     voice_url = "https://huggingface.co/onnx-community/Kokoro-82M-ONNX/resolve/main/voices/af_bella.bin"
     download_file(voice_url, os.path.join(RESOURCES_DIR, "kokoro", "voices", "af_bella.bin"))
+
+    # Download additional male voices for Phase 5
+    kokoro_extra = ["bm_george.bin", "am_michael.bin", "am_adam.bin"]
+    for voice in kokoro_extra:
+        url = f"https://huggingface.co/onnx-community/Kokoro-82M-ONNX/resolve/main/voices/{voice}"
+        download_file(url, os.path.join(RESOURCES_DIR, "kokoro", "voices", voice))
     
     print("Kokoro model and voice downloaded.")
+
+def sync_to_build_targets():
+    print("\n--- Syncing resources to active build targets ---")
+    target_dirs = [
+        os.path.join(BASE_DIR, "src-tauri", "target", "debug", "resources"),
+        os.path.join(BASE_DIR, "src-tauri", "target", "release", "resources"),
+    ]
+    for target in target_dirs:
+        if os.path.exists(target):
+            print(f"Syncing resources to: {target}")
+            try:
+                for root, dirs, files in os.walk(RESOURCES_DIR):
+                    rel_path = os.path.relpath(root, RESOURCES_DIR)
+                    dest_dir = os.path.join(target, rel_path) if rel_path != "." else target
+                    os.makedirs(dest_dir, exist_ok=True)
+                    for file in files:
+                        src_file = os.path.join(root, file)
+                        dest_file = os.path.join(dest_dir, file)
+                        shutil.copy2(src_file, dest_file)
+            except Exception as e:
+                print(f"Failed to sync to {target}: {e}")
 
 def main():
     create_dirs()
@@ -197,6 +237,7 @@ def main():
     setup_whisper()
     setup_piper()
     setup_kokoro()
+    sync_to_build_targets()
     print("\nResource download phase complete!")
 
 if __name__ == "__main__":

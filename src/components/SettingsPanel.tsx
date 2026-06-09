@@ -10,18 +10,15 @@ interface SettingsPanelProps {
 }
 
 const KOKORO_VOICES = [
-  { value: "af_bella", label: "Bella (Female)" },
-  { value: "af_sarah", label: "Sarah (Female)" },
-  { value: "am_adam", label: "Adam (Male)" },
-  { value: "bf_emma", label: "Emma (Female UK)" },
-  { value: "bm_george", label: "George (Male UK)" },
+  { value: "bm_george", label: "George (Male UK - Rusty)" },
+  { value: "am_michael", label: "Michael (Male US - Soothing)" },
+  { value: "am_adam", label: "Adam (Male US - Shrill)" },
 ];
 
 const PIPER_VOICES = [
-  { value: "en_US-lessac-medium", label: "Lessac (Medium)" },
-  { value: "en_US-joe-medium", label: "Joe (Medium)" },
-  { value: "en_US-amy-low", label: "Amy (Low)" },
-  { value: "en_GB-alan-low", label: "Alan (Low UK)" },
+  { value: "en_US-joe-medium", label: "Joe (Male US - Soothing)" },
+  { value: "en_US-danny-low", label: "Danny (Male US - Rusty)" },
+  { value: "en_GB-alan-low", label: "Alan (Male UK - Shrill)" },
 ];
 
 export const SettingsPanel: React.FC<SettingsPanelProps> = ({
@@ -229,7 +226,7 @@ export const SettingsPanel: React.FC<SettingsPanelProps> = ({
               type="text"
               value={settings.pttHotkey}
               readOnly
-              placeholder="Right Ctrl (Fixed)"
+              placeholder="Ctrl + Space (Fixed)"
               className="retro-input"
               style={{ opacity: 0.6, cursor: "not-allowed" }}
             />

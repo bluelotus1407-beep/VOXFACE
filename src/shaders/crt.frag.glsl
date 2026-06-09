@@ -12,6 +12,8 @@ uniform bool uChromaticEnabled;
 uniform bool uGrainEnabled;
 uniform bool uGlowEnabled;
 uniform bool uListeningState;
+uniform float uGazeShiftX;
+uniform float uGazeShiftY;
 
 varying vec2 vUv;
 
@@ -76,7 +78,7 @@ void main() {
     }
 
     // Aspect Ratio Cover mapping with zoom factor to fit inside the CRT screen
-    float zoom = 1.1;
+    float zoom = 0.88;
     vec2 texUv = uv;
     float V = uResolution.x / uResolution.y;
     float T = 2816.0 / 1536.0; // Texture aspect ratio
@@ -95,11 +97,10 @@ void main() {
         return;
     }
 
-    // Pupil scan shift for listening state
-    if (uListeningState) {
-        if (texUv.y > 0.45 && texUv.y < 0.65 && texUv.x > 0.25 && texUv.x < 0.75) {
-            texUv.x += sin(uTime * 3.5) * 0.015;
-        }
+    // Goggle eye/pupil shift
+    if (texUv.y > 0.45 && texUv.y < 0.65 && texUv.x > 0.25 && texUv.x < 0.75) {
+        texUv.x += uGazeShiftX;
+        texUv.y += uGazeShiftY;
     }
 
     // 3. Chromatic Aberration

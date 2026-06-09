@@ -182,14 +182,17 @@ impl TtsManager {
 
         let mut success = false;
 
+        println!("TTS Debug: Engine is '{}', Voice is '{}'", settings.tts_engine, settings.tts_voice);
         if settings.tts_engine == "Piper" {
             if let Some(piper_bin) = self.find_binary("piper", "piper") {
                 let model_dir = piper_bin.parent().unwrap_or(&piper_bin).to_path_buf();
                 let model_name = format!("{}.onnx", settings.tts_voice);
                 let model_path = model_dir.join(&model_name);
+                println!("TTS Debug: Found piper binary at {:?}", piper_bin);
+                println!("TTS Debug: Using model path {:?}", model_path);
                 
-                let mut cmd = Command::new(piper_bin);
-                cmd.arg("-m").arg(model_path)
+                let mut cmd = Command::new(&piper_bin);
+                cmd.arg("-m").arg(&model_path)
                    .arg("-f").arg(&wav_path)
                    .stdin(Stdio::piped())
                    .stdout(Stdio::null())
@@ -200,18 +203,26 @@ impl TtsManager {
                         let _ = stdin.write_all(text_to_speak.as_bytes());
                     }
                     if let Ok(status) = child.wait() {
+                        println!("TTS Debug: Piper exited with status success={}", status.success());
                         if status.success() {
                             success = true;
                         }
+                    } else {
+                        println!("TTS Debug: Failed to wait for piper child process");
                     }
+                } else {
+                    println!("TTS Debug: Failed to spawn piper command");
                 }
+            } else {
+                println!("TTS Debug: Could not find piper binary!");
             }
         } else {
             // Default to Kokoro
             if let Some(kokoro_bin) = self.find_binary("kokoro", "kokoro-cli") {
                 let model_dir = kokoro_bin.parent().unwrap_or(&kokoro_bin).to_path_buf();
+                println!("TTS Debug: Found kokoro binary at {:?}", kokoro_bin);
                 
-                let mut cmd = Command::new(kokoro_bin);
+                let mut cmd = Command::new(&kokoro_bin);
                 cmd.arg("-m").arg(model_dir.join("kokoro-82M.onnx"))
                    .arg("-v").arg(model_dir.join("voices").join(format!("{}.bin", settings.tts_voice)))
                    .arg("-t").arg(&text_to_speak)
@@ -221,36 +232,68 @@ impl TtsManager {
                    
                 if let Ok(mut child) = cmd.spawn() {
                     if let Ok(status) = child.wait() {
+                        println!("TTS Debug: Kokoro exited with status success={}", status.success());
                         if status.success() {
                             success = true;
                         }
                     }
                 }
+            } else {
+                println!("TTS Debug: Could not find kokoro-cli binary!");
             }
         }
+
+        println!("TTS Debug: Generation result success={}, wav_exists={}", success, wav_path.exists());
 
         if success && wav_path.exists() {
             // We need to run playback in a blocking fashion so we wait for sinks to sleep
             let play_app_handle = app_handle.clone();
             let wav_path_clone = wav_path.clone();
             
+            if let Some(stt_state) = app_handle.try_state::<crate::stt::SttState>() {
+                *stt_state.tts_active.lock().unwrap() = true;
+            }
+
+            let _ = app_handle.emit("tts:speak_start", text_to_speak.clone());
+
             let play_task = tokio::task::spawn_blocking(move || {
-                if let Ok((_stream, stream_handle)) = OutputStream::try_default() {
-                    if let Ok(file) = File::open(&wav_path_clone) {
-                        let reader = BufReader::new(file);
-                        if let Ok(source) = Decoder::new(reader) {
-                            if let Ok(sink) = Sink::try_new(&stream_handle) {
-                                sink.set_volume(settings.volume as f32 / 100.0);
-                                
-                                let monitored_source = AmplitudeMonitoringSource::new(source, play_app_handle);
-                                sink.append(monitored_source);
-                                sink.sleep_until_end();
+                println!("TTS Debug: Starting audio playback task");
+                match OutputStream::try_default() {
+                    Ok((_stream, stream_handle)) => {
+                        println!("TTS Debug: Opened default audio output stream");
+                        match File::open(&wav_path_clone) {
+                            Ok(file) => {
+                                let reader = BufReader::new(file);
+                                match Decoder::new(reader) {
+                                    Ok(source) => {
+                                        match Sink::try_new(&stream_handle) {
+                                            Ok(sink) => {
+                                                sink.set_volume(settings.volume as f32 / 100.0);
+                                                println!("TTS Debug: Created Sink, playing audio...");
+                                                let monitored_source = AmplitudeMonitoringSource::new(source, play_app_handle);
+                                                sink.append(monitored_source);
+                                                sink.sleep_until_end();
+                                                println!("TTS Debug: Audio playback finished");
+                                            }
+                                            Err(e) => println!("TTS Debug: Failed to create Sink: {:?}", e),
+                                        }
+                                    }
+                                    Err(e) => println!("TTS Debug: Failed to decode WAV file: {:?}", e),
+                                }
                             }
+                            Err(e) => println!("TTS Debug: Failed to open WAV file for playback: {:?}", e),
                         }
+                    }
+                    Err(e) => {
+                        println!("TTS Debug: Failed to open default audio output stream: {:?}", e);
                     }
                 }
             });
             let _ = play_task.await;
+
+            if let Some(stt_state) = app_handle.try_state::<crate::stt::SttState>() {
+                *stt_state.tts_active.lock().unwrap() = false;
+            }
         }
 
         let _ = std::fs::remove_file(wav_path);

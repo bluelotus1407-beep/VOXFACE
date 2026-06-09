@@ -45,7 +45,7 @@ impl Default for Settings {
             stt_mode: "Push to Talk".to_string(),
             wake_word: "hey vox".to_string(),
             stt_model: "tiny.en".to_string(),
-            ptt_hotkey: "Right Ctrl".to_string(),
+            ptt_hotkey: "Ctrl + Space".to_string(),
             face_skin: "Green".to_string(),
             scanlines: true,
             curvature: true,
@@ -69,7 +69,11 @@ pub fn load_settings(app: &AppHandle) -> Settings {
     if let Ok(mut file) = File::open(&path) {
         let mut content = String::new();
         if file.read_to_string(&mut content).is_ok() {
-            if let Ok(settings) = serde_json::from_str::<Settings>(&content) {
+            if let Ok(mut settings) = serde_json::from_str::<Settings>(&content) {
+                if settings.ptt_hotkey == "Right Ctrl" {
+                    settings.ptt_hotkey = "Ctrl + Space".to_string();
+                    save_settings(app, &settings);
+                }
                 return settings;
             }
         }
