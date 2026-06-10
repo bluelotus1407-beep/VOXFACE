@@ -153,7 +153,7 @@ def setup_piper():
             
             # Copy piper files. In Rhasspy's release, everything is inside a 'piper/' subfolder.
             piper_extracted_dir = os.path.join(temp_extract, "piper")
-            if not os.path.exists(piper_extracted_dir):
+            if not os.path.isdir(piper_extracted_dir):
                 piper_extracted_dir = temp_extract
 
             for item in os.listdir(piper_extracted_dir):
