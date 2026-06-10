@@ -49,7 +49,7 @@ pub fn run() {
                 #[cfg(target_os = "macos")]
                 {
                     use objc::runtime::Object;
-                    use objc::{msg_send, sel, sel_impl};
+                    use objc::{class, msg_send, sel, sel_impl};
                     if let Ok(ptr) = window.ns_window() {
                         unsafe {
                             let ns_window = ptr as *mut Object;

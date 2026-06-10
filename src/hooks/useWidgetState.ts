@@ -25,11 +25,21 @@ export function useWidgetState(settings: Settings | null, isSettingsOpen: boolea
   useTauriEvents<string>("llm:token", () => {
     if (idleTimeoutRef.current) {
       clearTimeout(idleTimeoutRef.current);
+      idleTimeoutRef.current = null;
     }
     setState("speaking");
   }, [settings?.sttMode]);
 
-  // 2. TTS Done event: start 3 second countdown to idle/listening
+  // 1.5. TTS Speak Start event: transition to/maintain speaking and cancel any pending idle timeouts
+  useTauriEvents<any>("tts:speak_start", () => {
+    if (idleTimeoutRef.current) {
+      clearTimeout(idleTimeoutRef.current);
+      idleTimeoutRef.current = null;
+    }
+    setState("speaking");
+  });
+
+  // 2. TTS Done event: start countdown to idle/listening
   useTauriEvents<void>("tts:done", () => {
     resetIdleTimeout();
   }, [settings?.sttMode]);

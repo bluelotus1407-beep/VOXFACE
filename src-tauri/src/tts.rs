@@ -101,27 +101,38 @@ impl TtsManager {
 
     // Resolves path of a resource binary, falling back to system path if not found
     fn find_binary(&self, engine: &str, binary_name: &str) -> Option<PathBuf> {
-        // 1. Check tauri resource directory (bundled as resources/<engine>/<binary>)
-        if let Ok(resource_path) = self.app.path().resource_dir() {
-            let names = if cfg!(target_os = "windows") {
-                vec![format!("{}.exe", binary_name), binary_name.to_string()]
-            } else {
-                vec![binary_name.to_string()]
-            };
+        let names = if cfg!(target_os = "windows") {
+            vec![format!("{}.exe", binary_name), binary_name.to_string()]
+        } else {
+            vec![binary_name.to_string()]
+        };
 
-            for name in names {
-                for bin_path in [
-                    resource_path.join(engine).join(&name),
-                    resource_path.join("resources").join(engine).join(&name),
-                ] {
-                    if bin_path.exists() {
-                        return Some(bin_path);
+        // 1. Check Python user bin and Cargo bin directories first on macOS/Linux for speed
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        {
+            if let Ok(home) = std::env::var("HOME") {
+                let home_path = PathBuf::from(home);
+                for name in &names {
+                    for dir in [
+                        home_path.join("Library/Python/3.9/bin"),
+                        home_path.join("Library/Python/3.10/bin"),
+                        home_path.join("Library/Python/3.11/bin"),
+                        home_path.join("Library/Python/3.12/bin"),
+                        home_path.join("Library/Python/3.13/bin"),
+                        home_path.join("Library/Python/3.14/bin"),
+                        home_path.join(".local/bin"),
+                        home_path.join(".cargo/bin"),
+                    ] {
+                        let bin_path = dir.join(name);
+                        if bin_path.exists() {
+                            return Some(bin_path);
+                        }
                     }
                 }
             }
         }
-        
-        // 2. Check system PATH
+
+        // 2. Check system PATH via which/where.exe
         let sys_name = if cfg!(target_os = "windows") {
             format!("{}.exe", binary_name)
         } else {
@@ -142,6 +153,20 @@ impl TtsManager {
                 if output.status.success() {
                     if let Some(first_line) = String::from_utf8_lossy(&output.stdout).lines().next() {
                         return Some(PathBuf::from(first_line.trim()));
+                    }
+                }
+            }
+        }
+
+        // 3. Fall back to tauri resource directory (bundled resources/<engine>/<binary>)
+        if let Ok(resource_path) = self.app.path().resource_dir() {
+            for name in &names {
+                for bin_path in [
+                    resource_path.join(engine).join(name),
+                    resource_path.join("resources").join(engine).join(name),
+                ] {
+                    if bin_path.exists() {
+                        return Some(bin_path);
                     }
                 }
             }
@@ -185,27 +210,52 @@ impl TtsManager {
         println!("TTS Debug: Engine is '{}', Voice is '{}'", settings.tts_engine, settings.tts_voice);
         if settings.tts_engine == "Piper" {
             if let Some(piper_bin) = self.find_binary("piper", "piper") {
-                let model_dir = piper_bin.parent().unwrap_or(&piper_bin).to_path_buf();
                 let model_name = format!("{}.onnx", settings.tts_voice);
-                let model_path = model_dir.join(&model_name);
+                let mut model_path = None;
+                if let Ok(resource_path) = self.app.path().resource_dir() {
+                    for dir in [
+                        resource_path.join("piper"),
+                        resource_path.join("resources").join("piper"),
+                    ] {
+                        let path = dir.join(&model_name);
+                        if path.exists() {
+                            model_path = Some(path);
+                            break;
+                        }
+                    }
+                }
+                let model_path = model_path.unwrap_or_else(|| {
+                    let model_dir = piper_bin.parent().unwrap_or(&piper_bin).to_path_buf();
+                    model_dir.join(&model_name)
+                });
                 println!("TTS Debug: Found piper binary at {:?}", piper_bin);
                 println!("TTS Debug: Using model path {:?}", model_path);
                 
                 let mut cmd = Command::new(&piper_bin);
-                cmd.arg("-m").arg(&model_path)
-                   .arg("-f").arg(&wav_path)
+                cmd.arg("--model").arg(&model_path)
+                   .arg("--output_file").arg(&wav_path)
                    .stdin(Stdio::piped())
                    .stdout(Stdio::null())
-                   .stderr(Stdio::null());
+                   .stderr(Stdio::piped());
                    
                 if let Ok(mut child) = cmd.spawn() {
                     if let Some(mut stdin) = child.stdin.take() {
                         let _ = stdin.write_all(text_to_speak.as_bytes());
                     }
+                    
+                    // Capture stderr before waiting
+                    let mut stderr_content = String::new();
+                    if let Some(mut stderr) = child.stderr.take() {
+                        use std::io::Read;
+                        let _ = stderr.read_to_string(&mut stderr_content);
+                    }
+
                     if let Ok(status) = child.wait() {
                         println!("TTS Debug: Piper exited with status success={}", status.success());
                         if status.success() {
                             success = true;
+                        } else {
+                            println!("TTS Debug: Piper stderr: {}", stderr_content.trim());
                         }
                     } else {
                         println!("TTS Debug: Failed to wait for piper child process");
@@ -219,12 +269,26 @@ impl TtsManager {
         } else {
             // Default to Kokoro
             if let Some(kokoro_bin) = self.find_binary("kokoro", "kokoro-cli") {
-                let model_dir = kokoro_bin.parent().unwrap_or(&kokoro_bin).to_path_buf();
+                let mut kokoro_dir = None;
+                if let Ok(resource_path) = self.app.path().resource_dir() {
+                    for dir in [
+                        resource_path.join("kokoro"),
+                        resource_path.join("resources").join("kokoro"),
+                    ] {
+                        if dir.join("kokoro-82M.onnx").exists() {
+                            kokoro_dir = Some(dir);
+                            break;
+                        }
+                    }
+                }
+                let kokoro_dir = kokoro_dir.unwrap_or_else(|| {
+                    kokoro_bin.parent().unwrap_or(&kokoro_bin).to_path_buf()
+                });
                 println!("TTS Debug: Found kokoro binary at {:?}", kokoro_bin);
                 
                 let mut cmd = Command::new(&kokoro_bin);
-                cmd.arg("-m").arg(model_dir.join("kokoro-82M.onnx"))
-                   .arg("-v").arg(model_dir.join("voices").join(format!("{}.bin", settings.tts_voice)))
+                cmd.arg("-m").arg(kokoro_dir.join("kokoro-82M.onnx"))
+                   .arg("-v").arg(kokoro_dir.join("voices").join(format!("{}.bin", settings.tts_voice)))
                    .arg("-t").arg(&text_to_speak)
                    .arg("-o").arg(&wav_path)
                    .stdout(Stdio::null())
@@ -254,7 +318,29 @@ impl TtsManager {
                 *stt_state.tts_active.lock().unwrap() = true;
             }
 
-            let _ = app_handle.emit("tts:speak_start", text_to_speak.clone());
+            // Get duration of WAV file
+            let mut duration_ms = 0;
+            if let Ok(file) = File::open(&wav_path) {
+                let reader = BufReader::new(file);
+                if let Ok(source) = Decoder::new(reader) {
+                    if let Some(d) = source.total_duration() {
+                        duration_ms = d.as_millis() as u64;
+                    }
+                }
+            }
+
+            #[derive(Clone, serde::Serialize)]
+            struct SpeakStartPayload {
+                text: String,
+                duration_ms: u64,
+            }
+
+            let payload = SpeakStartPayload {
+                text: text_to_speak.clone(),
+                duration_ms,
+            };
+
+            let _ = app_handle.emit("tts:speak_start", payload);
 
             let play_task = tokio::task::spawn_blocking(move || {
                 println!("TTS Debug: Starting audio playback task");

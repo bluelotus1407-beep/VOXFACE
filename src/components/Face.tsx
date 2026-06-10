@@ -61,10 +61,9 @@ export const Face: React.FC<FaceProps> = ({ state, settings }) => {
     settingsRef.current = settings;
   }, [settings]);
 
-  // Vowel sequence syncing and expression tracking
-  const vowelsRef = useRef<string[]>([]);
-  const vowelIndexRef = useRef<number>(0);
-  const lastVowelTimeRef = useRef<number>(0);
+  // Word segments and speech timing tracking
+  const wordSegmentsRef = useRef<any[]>([]);
+  const speechStartPerfRef = useRef<number>(0);
   const expressionRef = useRef<"smile" | "laugh" | "glitch" | null>(null);
 
   // Helper to parse expressions from the LLM sentence
@@ -107,27 +106,67 @@ export const Face: React.FC<FaceProps> = ({ state, settings }) => {
   });
 
   // Listen for the actual start of speech for each sentence from the backend
-  useTauriEvents<string>("tts:speak_start", (event) => {
-    const payload = event.payload || "";
-    const text = typeof payload === "string" ? payload.toLowerCase() : "";
+  useTauriEvents<any>("tts:speak_start", (event) => {
+    const payload = event.payload;
+    let text = "";
+    let durationMs = 0;
+    
+    if (typeof payload === "string") {
+      text = payload.toLowerCase();
+    } else if (payload && typeof payload === "object") {
+      text = (payload.text || "").toLowerCase();
+      durationMs = payload.duration_ms || 0;
+    }
     
     // Parse expression from text currently being spoken
-    expressionRef.current = detectExpression(payload);
+    expressionRef.current = detectExpression(text);
     
-    // Extract standard vowels (a, e, i, o, u) from the sentence currently being spoken
-    const extracted = text.split("").filter((char) => ["a", "e", "i", "o", "u"].includes(char));
-    if (extracted.length > 0) {
-      vowelsRef.current = extracted;
-    } else {
-      vowelsRef.current = ["a", "e", "i", "o", "u"]; // fallback sequence
+    // Split into clean words and compute word segments with timings
+    const parsedWords = text.split(/\s+/);
+    const segments: any[] = [];
+    let totalChars = 0;
+    
+    for (const rawWord of parsedWords) {
+      const cleanWord = rawWord.replace(/[^a-z]/g, "");
+      if (cleanWord.length === 0) continue;
+      
+      let vowels = cleanWord.split("").filter((char) => ["a", "e", "i", "o", "u"].includes(char));
+      if (vowels.length === 0) {
+        if (cleanWord.includes("y")) {
+          vowels = ["a", "e"];
+        } else {
+          vowels = ["neutral"];
+        }
+      }
+      
+      segments.push({
+        word: cleanWord,
+        length: cleanWord.length,
+        vowels,
+      });
+      totalChars += cleanWord.length;
     }
-    vowelIndexRef.current = 0;
+    
+    const actualDurationMs = durationMs > 0 ? durationMs : totalChars * 150;
+    let currentOffset = 0;
+    
+    wordSegmentsRef.current = segments.map((seg) => {
+      const duration = totalChars > 0 ? (seg.length / totalChars) * actualDurationMs : 0;
+      const start = currentOffset;
+      currentOffset += duration;
+      return {
+        ...seg,
+        startMs: start,
+        endMs: start + duration,
+      };
+    });
+    
+    speechStartPerfRef.current = performance.now();
   });
 
-  // Clear vowels and expression when speech is complete
+  // Clear segments and expression when speech is complete
   useTauriEvents<void>("tts:done", () => {
-    vowelsRef.current = [];
-    vowelIndexRef.current = 0;
+    wordSegmentsRef.current = [];
     expressionRef.current = null;
   });
 
@@ -154,7 +193,7 @@ export const Face: React.FC<FaceProps> = ({ state, settings }) => {
       return "neutral"; // Closed mouth, pupils will scan in shader
     }
 
-    // Speaking state: select mouth texture based on amplitude (0 to 7) and vowel sequence
+    // Speaking state: select mouth texture based on amplitude (0 to 7) and active word segment timing
     const amp = currentAmplitudeRef.current;
     if (amp === 0) {
       // Pause in speech: display expression state if active
@@ -169,14 +208,35 @@ export const Face: React.FC<FaceProps> = ({ state, settings }) => {
       return "glitch";
     }
 
-    // Determine current vowel from sequence or fallback
-    const vowels = vowelsRef.current.length > 0 ? vowelsRef.current : ["a", "e", "i", "o", "u"];
-    const currentVowel = vowels[vowelIndexRef.current % vowels.length];
+    // For very low volumes, keep mouth relatively closed/small
+    if (amp <= 1) {
+      return "neutral";
+    }
+    if (amp <= 2) {
+      return "a"; // small open
+    }
+
+    // Determine current vowel from active word segment
+    const elapsedMs = performance.now() - speechStartPerfRef.current;
+    const activeSegment = wordSegmentsRef.current.find(
+      (seg) => elapsedMs >= seg.startMs && elapsedMs < seg.endMs
+    );
+
+    let currentVowel = "neutral";
+    if (activeSegment) {
+      const wordElapsedMs = elapsedMs - activeSegment.startMs;
+      const wordDurationMs = activeSegment.endMs - activeSegment.startMs;
+      const vowelDurationMs = wordDurationMs / activeSegment.vowels.length;
+      const vowelIndex = Math.floor(wordElapsedMs / vowelDurationMs) % activeSegment.vowels.length;
+      currentVowel = activeSegment.vowels[vowelIndex];
+    }
 
     if (currentVowel === "a") {
-      if (amp <= 2) return "a";
-      if (amp <= 5) return "a1";
-      return "a2";
+      if (amp <= 4) return "a1"; // medium open
+      return "a2"; // large open
+    }
+    if (currentVowel === "neutral") {
+      return "neutral";
     }
     return currentVowel; // e, i, o, u
   };
@@ -330,14 +390,7 @@ export const Face: React.FC<FaceProps> = ({ state, settings }) => {
         gazeTimerRef.current = 0.0;
       }
 
-      // Vowel lip sync updates
-      if (stateRef.current === "speaking" && currentAmplitudeRef.current > 0) {
-        if (time - lastVowelTimeRef.current > 0.12) {
-          lastVowelTimeRef.current = time;
-          const len = vowelsRef.current.length > 0 ? vowelsRef.current.length : 5;
-          vowelIndexRef.current = (vowelIndexRef.current + 1) % len;
-        }
-      }
+
 
       // Swap texture in material dynamically
       const activeKey = getActiveKey();

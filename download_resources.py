@@ -113,66 +113,73 @@ def setup_piper():
     system = platform.system()
     machine = platform.machine().lower()
 
-    if system == "Linux":
-        if "arm" in machine or "aarch64" in machine:
-            piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_arm64.tar.gz"
-        else:
-            piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz"
-        archive_type = "tar.gz"
-    elif system == "Darwin":
-        if "arm" in machine or "aarch64" in machine:
-            piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_macos_aarch64.tar.gz"
-        else:
-            piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_macos_x64.tar.gz"
-        archive_type = "tar.gz"
-    elif system == "Windows":
-        piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_windows_amd64.zip"
-        archive_type = "zip"
+    is_mac_arm = system == "Darwin" and ("arm" in machine or "aarch64" in machine)
+
+    if is_mac_arm:
+        piper_url = "https://github.com/itsabhishekolkha/piper-arm-build/releases/download/v1.2.0/piper.arm64-no.deps.deps"
+        dest = os.path.join(RESOURCES_DIR, "piper", "piper")
+        if download_file(piper_url, dest):
+            os.chmod(dest, 0o755)
+            print("Piper static ARM64 binary configured successfully.")
     else:
-        print(f"Unsupported system for Piper download: {system}")
-        return
-
-    # Download archive
-    filename = "piper.tar.gz" if archive_type == "tar.gz" else "piper.zip"
-    archive_dest = os.path.join(RESOURCES_DIR, "piper", filename)
-    
-    if download_file(piper_url, archive_dest):
-        try:
-            print(f"Extracting {filename}...")
-            temp_extract = os.path.join(RESOURCES_DIR, "piper", "temp_extract")
-            if os.path.exists(temp_extract):
-                shutil.rmtree(temp_extract)
-            os.makedirs(temp_extract, exist_ok=True)
-            
-            if archive_type == "tar.gz":
-                with tarfile.open(archive_dest, "r:gz") as tar:
-                    tar.extractall(temp_extract)
+        if system == "Linux":
+            if "arm" in machine or "aarch64" in machine:
+                piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_arm64.tar.gz"
             else:
-                with zipfile.ZipFile(archive_dest, "r") as zip_ref:
-                    zip_ref.extractall(temp_extract)
-            
-            # Copy piper files. In Rhasspy's release, everything is inside a 'piper/' subfolder.
-            piper_extracted_dir = os.path.join(temp_extract, "piper")
-            if not os.path.isdir(piper_extracted_dir):
-                piper_extracted_dir = temp_extract
+                piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz"
+            archive_type = "tar.gz"
+        elif system == "Darwin":
+            # This is Intel Mac
+            piper_url = "https://github.com/rhasspy/piper/releases/download/2023.11.14-2/piper_macos_x64.tar.gz"
+            archive_type = "tar.gz"
+        elif system == "Windows":
+            piper_url = "https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_windows_amd64.zip"
+            archive_type = "zip"
+        else:
+            print(f"Unsupported system for Piper download: {system}")
+            return
 
-            for item in os.listdir(piper_extracted_dir):
-                s = os.path.join(piper_extracted_dir, item)
-                d = os.path.join(RESOURCES_DIR, "piper", item)
-                if os.path.isdir(s):
-                    if os.path.exists(d):
-                        shutil.rmtree(d)
-                    shutil.copytree(s, d)
+        # Download archive
+        filename = "piper.tar.gz" if archive_type == "tar.gz" else "piper.zip"
+        archive_dest = os.path.join(RESOURCES_DIR, "piper", filename)
+        
+        if download_file(piper_url, archive_dest):
+            try:
+                print(f"Extracting {filename}...")
+                temp_extract = os.path.join(RESOURCES_DIR, "piper", "temp_extract")
+                if os.path.exists(temp_extract):
+                    shutil.rmtree(temp_extract)
+                os.makedirs(temp_extract, exist_ok=True)
+                
+                if archive_type == "tar.gz":
+                    with tarfile.open(archive_dest, "r:gz") as tar:
+                        tar.extractall(temp_extract)
                 else:
-                    shutil.copy2(s, d)
-                    if item in ["piper", "piper.exe"]:
-                        os.chmod(d, 0o755)
-            
-            print("Piper extracted successfully.")
-            shutil.rmtree(temp_extract)
-            os.remove(archive_dest)
-        except Exception as e:
-            print(f"Failed to extract piper: {e}")
+                    with zipfile.ZipFile(archive_dest, "r") as zip_ref:
+                        zip_ref.extractall(temp_extract)
+                
+                # Copy piper files. In Rhasspy's release, everything is inside a 'piper/' subfolder.
+                piper_extracted_dir = os.path.join(temp_extract, "piper")
+                if not os.path.isdir(piper_extracted_dir):
+                    piper_extracted_dir = temp_extract
+
+                for item in os.listdir(piper_extracted_dir):
+                    s = os.path.join(piper_extracted_dir, item)
+                    d = os.path.join(RESOURCES_DIR, "piper", item)
+                    if os.path.isdir(s):
+                        if os.path.exists(d):
+                            shutil.rmtree(d)
+                        shutil.copytree(s, d)
+                    else:
+                        shutil.copy2(s, d)
+                        if item in ["piper", "piper.exe"]:
+                            os.chmod(d, 0o755)
+                
+                print("Piper extracted successfully.")
+                shutil.rmtree(temp_extract)
+                os.remove(archive_dest)
+            except Exception as e:
+                print(f"Failed to extract piper: {e}")
             
     # Download default voice model: en_US-lessac-medium
     voice_url = "https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx"
