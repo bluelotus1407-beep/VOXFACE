@@ -4,7 +4,25 @@ This document summarizes the layout, visual, and behavioral improvements applied
 
 ---
 
-## Latest Updates: Phase 4 — Mini-Icon Cleanup, Auto-Collapse & Transitions
+## Latest Updates: macOS Window Transparency and White Border Fix
+
+We have successfully resolved the solid white background/border around the VOXFACE widget and mini-icon on macOS.
+
+### 1. macOS Private APIs Configured
+- Set `"macOSPrivateApi": true` in `tauri.conf.json` within the `"app"` section.
+- Added the `macos-private-api` feature to the `tauri` dependency in `Cargo.toml`.
+- Added the `objc = "0.2"` target-specific dependency for macOS in `Cargo.toml`.
+
+### 2. Native macOS Transparency Applied
+- Implemented an Objective-C runtime setup in `lib.rs` (compiled conditionally with `#[cfg(target_os = "macos")]`) that runs on startup.
+- It retrieves the main window's `ns_window` pointer and programmatically calls:
+  - `setBackgroundColor: NSColor.clearColor` (sets the underlying native macOS window background to fully transparent, removing the white border/canvas leaking around the edges).
+  - `setOpaque: false` (notifies the macOS window server that the window is transparent).
+  - `setHasShadow: false` (removes the default OS-level window shadow around the transparent bounding box).
+
+---
+
+## Historical Updates: Phase 4 — Mini-Icon Cleanup, Auto-Collapse & Transitions
 
 We have successfully completed **Phase 4** of the plan:
 

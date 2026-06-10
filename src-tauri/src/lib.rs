@@ -46,6 +46,21 @@ pub fn run() {
             proxy::restart_proxy(app.handle(), settings.proxy_port);
 
             if let Some(window) = app.get_webview_window("main") {
+                #[cfg(target_os = "macos")]
+                {
+                    use objc::runtime::Object;
+                    use objc::{msg_send, sel, sel_impl};
+                    if let Ok(ptr) = window.ns_window() {
+                        unsafe {
+                            let ns_window = ptr as *mut Object;
+                            let clear_color: *mut Object = msg_send![class!(NSColor), clearColor];
+                            let _: () = msg_send![ns_window, setBackgroundColor: clear_color];
+                            let _: () = msg_send![ns_window, setOpaque: false];
+                            let _: () = msg_send![ns_window, setHasShadow: false];
+                        }
+                    }
+                }
+
                 let app_data_dir = app.path().app_data_dir().unwrap();
                 let pos_file = app_data_dir.join("position.json");
                 
